@@ -800,11 +800,13 @@ md5 input = unsafePerformIO $
 sha1 :: B.ByteString -> B.ByteString
 sha1 input = unsafePerformIO $
 	B.unsafeUseAsCStringLen input $ \(pIn, inLen) ->
-	F.alloca $ \pOut ->
-	F.allocaBytes 20 $ \outBuf -> do
-	F.poke pOut outBuf
+	F.alloca $ \pOut -> do
 	gsasl_sha1 pIn (fromIntegral inLen) pOut >>= checkRC
-	B.packCStringLen (outBuf, 20)
+	outBuf <- F.peek pOut
+	ret <- B.packCStringLen (outBuf, 20)
+	F.free outBuf
+	return ret
+
 
 hmacMD5 :: B.ByteString -- ^ Key
         -> B.ByteString -- ^ Input data
