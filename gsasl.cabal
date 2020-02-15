@@ -5,7 +5,7 @@ license-file: COPYING
 author: John Millikin <john@john-millikin.com>
 maintainer: Stephen Paul Weber <singpolyma@singpolyma.net>
 build-type: Simple
-cabal-version: >= 1.6
+cabal-version: >= 1.10
 category: Network
 stability: experimental
 homepage: https://git.sr.ht/~singpolyma/gsasl-haskell
