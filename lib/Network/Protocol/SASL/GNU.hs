@@ -19,13 +19,13 @@ module Network.Protocol.SASL.GNU
 	  headerVersion
 	, libraryVersion
 	, checkVersion
-	
+
 	-- * SASL Contexts
 	, SASL
 	, runSASL
 	, setCallback
 	, runCallback
-	
+
 	-- * Mechanisms
 	, Mechanism (..)
 	, clientMechanisms
@@ -33,33 +33,33 @@ module Network.Protocol.SASL.GNU
 	, clientSuggestMechanism
 	, serverMechanisms
 	, serverSupports
-	
+
 	-- * SASL Sessions
 	, Session
 	, runClient
 	, runServer
 	, mechanismName
-	
+
 	-- ** Session Properties
 	, Property (..)
 	, setProperty
 	, getProperty
 	, getPropertyFast
-	
+
 	-- ** Session IO
 	, Progress (..)
 	, step
 	, step64
 	, encode
 	, decode
-	
+
 	-- ** Error handling
 	, Error (..)
 	, catch
 	, handle
 	, try
 	, throw
-	
+
 	-- * Bundled codecs
 	, toBase64
 	, fromBase64
@@ -120,7 +120,7 @@ libraryVersion = io where
 		return $ case maybeStr >>= parseVersion of
 			Just version -> version
 			Nothing -> error $ "Invalid version string: " ++ show maybeStr
-	
+
 	eof = do
 		s <- P.look
 		unless (null s) P.pfail
@@ -140,8 +140,8 @@ instance Functor SASL where
 	fmap f = SASL . fmap f . unSASL
 
 instance Applicative SASL where
-        pure = SASL . pure
-        (<*>) = ap
+	pure = SASL . pure
+	(<*>) = ap
 
 instance Monad SASL where
 	return = SASL . return
@@ -251,8 +251,8 @@ instance Functor Session where
 	fmap f = Session . fmap f . unSession
 
 instance Applicative Session where
-        pure = Session . pure
-        (<*>) = ap
+	pure = Session . pure
+	(<*>) = ap
 
 instance Monad Session where
 	return = Session . return
@@ -271,10 +271,10 @@ runSession start (Mechanism mech) session = bracketSASL newSession freeSession i
 		start ctx pMech pSessionCtx >>= checkRC
 		fmap (Right . SessionCtx) $ F.peek pSessionCtx
 	noSession (SASLException err) = return $ Left err
-	
+
 	freeSession (Left _) = return ()
 	freeSession (Right (SessionCtx ptr)) = gsasl_finish ptr
-	
+
 	io (Left err) = return $ Left err
 	io (Right sctx) = E.catch
 		(fmap Right $ R.runReaderT (unSession session) sctx)
@@ -331,7 +331,7 @@ data Error
 	| NoPIN
 	| NoService
 	| NoHostname
-	
+
 	| GSSAPI_ReleaseBufferError
 	| GSSAPI_ImportNameError
 	| GSSAPI_InitSecContextError
@@ -346,10 +346,10 @@ data Error
 	| GSSAPI_InquireMechForSASLNameError
 	| GSSAPI_TestOIDSetMemberError
 	| GSSAPI_ReleaseOIDSetError
-	
+
 	| KerberosV5_InitError
 	| KerberosV5_InternalError
-	
+
 	| SecurID_ServerNeedAdditionalPasscode
 	| SecurID_ServerNeedNewPIN
 
@@ -423,7 +423,7 @@ cToError x = case x of
 	35 -> NoClientCode
 	36 -> NoServerCode
 	51 -> NoCallback
-	52 -> NoAnonymousToken 
+	52 -> NoAnonymousToken
 	53 -> NoAuthID
 	54 -> NoAuthzID
 	55 -> NoPassword
@@ -489,7 +489,7 @@ data Property
 	| PropertyScramIter
 	| PropertyScramSalt
 	| PropertyScramSaltedPassword
-	
+
 	| ValidateSimple
 	| ValidateExternal
 	| ValidateAnonymous
@@ -608,28 +608,28 @@ freeCallbackHook ptr = unless (ptr == F.nullPtr) $ do
 callbackImpl :: (Property -> Session Progress) -> CallbackFn
 callbackImpl cb _ sctx cProp = let
 	globalIO = error "globalIO is not implemented"
-	
+
 	sessionIO = do
 		let session = cb $ cToProperty cProp
 		fmap cFromProgress $ R.runReaderT (unSession session) (SessionCtx sctx)
-	
+
 	onError :: SASLException -> IO F.CInt
 	onError (SASLException err) = return $ cFromError err
-	
+
 	onException :: E.SomeException -> IO F.CInt
 	onException exc = do
 		-- A bit ugly; session hooks aren't used anywhere else in
 		-- the binding, so the exception is stashed here.
 		stablePtr <- F.newStablePtr exc
 		gsasl_session_hook_set sctx $ F.castStablePtrToPtr stablePtr
-		
+
 		-- standard libgsasl return codes are all >= 0, so using -1
 		-- provides an easy way to determine later whether the
 		-- exception came from Haskell code.
 		return (-1)
-	
+
 	catchErrors io = E.catches io [E.Handler onError, E.Handler onException]
-	
+
 	in catchErrors $ if sctx == F.nullPtr then globalIO else sessionIO
 
 foreign import ccall "wrapper"
@@ -698,7 +698,7 @@ step input = bracketSession get free peek where
 		cstr <- F.peek pOutput
 		cstrLen <- F.peek pOutputLen
 		return (cstr, cstrLen, progress)
-	
+
 	free (cstr, _, _) = gsasl_free cstr
 	peek (cstr, cstrLen, progress) = do
 		output <- B.packCStringLen (cstr, fromIntegral cstrLen)
@@ -716,7 +716,7 @@ step64 input = bracketSession get free peek where
 		progress <- checkStepRC rc
 		cstr <- F.peek pOutput
 		return (cstr, progress)
-	
+
 	free (cstr, _) = gsasl_free cstr
 	peek (cstr, progress) = do
 		output <- B.packCString cstr
