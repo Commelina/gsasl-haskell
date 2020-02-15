@@ -1,6 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ForeignFunctionInterface #-}
-
 -- Copyright (C) 2010 John Millikin <jmillikin@gmail.com>
 --
 -- This program is free software: you can redistribute it and/or modify
@@ -87,7 +84,6 @@ import qualified Data.ByteString.Unsafe as B
 import qualified Data.ByteString.Char8 as Char8
 import           Data.Char (isDigit)
 import           Data.String (IsString, fromString)
-import           Data.Typeable (Typeable)
 import qualified Foreign as F
 import qualified Foreign.C as F
 import           System.IO.Unsafe (unsafePerformIO)
@@ -368,7 +364,7 @@ strError :: Error -> String
 strError err = unsafePerformIO $ gsasl_strerror (cFromError err) >>= F.peekCString
 
 data SASLException = SASLException Error
-	deriving (Show, Typeable)
+	deriving (Show)
 
 instance E.Exception SASLException
 

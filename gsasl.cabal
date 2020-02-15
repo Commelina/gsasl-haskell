@@ -24,7 +24,8 @@ source-repository this
   tag: haskell-gsasl_0.3.6
 
 library
-  ghc-options: -Wall -O2
+  default-language: Haskell2010
+  ghc-options: -Wall -Wno-tabs -O2
   hs-source-dirs: lib
   c-sources: cbits/hsgsasl-shim.c
 
