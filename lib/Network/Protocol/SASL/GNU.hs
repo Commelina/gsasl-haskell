@@ -74,9 +74,10 @@ module Network.Protocol.SASL.GNU
 -- Imports {{{
 
 import           Prelude hiding (catch)
-import           Control.Applicative (Applicative, pure, (<*>))
+import           Data.Maybe (fromMaybe)
+import           Control.Applicative (Applicative, pure, (<*>), (<$>))
 import qualified Control.Exception as E
-import           Control.Monad (ap, when, unless)
+import           Control.Monad (ap, when, unless, (<=<))
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Control.Monad.Trans.Reader as R
 import qualified Data.ByteString as B
@@ -117,9 +118,8 @@ libraryVersion = io where
 	io = do
 		cstr <- gsasl_check_version F.nullPtr
 		maybeStr <- F.maybePeek F.peekCString cstr
-		return $ case maybeStr >>= parseVersion of
-			Just version -> version
-			Nothing -> error $ "Invalid version string: " ++ show maybeStr
+		return $ fromMaybe (error $ "Invalid version string: " ++ show maybeStr)
+			(maybeStr >>= parseVersion)
 
 	eof = do
 		s <- P.look
@@ -206,9 +206,9 @@ clientSuggestMechanism :: [Mechanism] -> SASL (Maybe Mechanism)
 clientSuggestMechanism mechs = do
 	let bytes = B.intercalate (Char8.pack " ") [x | Mechanism x <- mechs]
 	ctx <- getContext
-	liftIO $ B.useAsCString bytes $ \pMechlist ->
-		gsasl_client_suggest_mechanism ctx pMechlist >>=
-		F.maybePeek (fmap Mechanism . B.packCString)
+	liftIO $ B.useAsCString bytes $
+		F.maybePeek (fmap Mechanism . B.packCString) <=<
+		gsasl_client_suggest_mechanism ctx
 
 -- | A list of 'Mechanism's supported by the @libgsasl@ server.
 serverMechanisms :: SASL [Mechanism]
@@ -269,7 +269,7 @@ runSession start (Mechanism mech) session = bracketSASL newSession freeSession i
 		B.useAsCString mech $ \pMech ->
 		F.alloca $ \pSessionCtx -> E.handle noSession $ do
 		start ctx pMech pSessionCtx >>= checkRC
-		fmap (Right . SessionCtx) $ F.peek pSessionCtx
+		Right . SessionCtx <$> F.peek pSessionCtx
 	noSession (SASLException err) = return $ Left err
 
 	freeSession (Left _) = return ()
@@ -277,7 +277,7 @@ runSession start (Mechanism mech) session = bracketSASL newSession freeSession i
 
 	io (Left err) = return $ Left err
 	io (Right sctx) = E.catch
-		(fmap Right $ R.runReaderT (unSession session) sctx)
+		(Right <$> R.runReaderT (unSession session) sctx)
 		(\(SASLException err) -> return $ Left err)
 
 -- | Run a session using the @libgsasl@ client.
@@ -363,8 +363,7 @@ instance Show Error where
 strError :: Error -> String
 strError err = unsafePerformIO $ gsasl_strerror (cFromError err) >>= F.peekCString
 
-data SASLException = SASLException Error
-	deriving (Show)
+newtype SASLException = SASLException Error deriving (Show)
 
 instance E.Exception SASLException
 
@@ -565,7 +564,7 @@ getProperty prop = do
 	liftIO $ do
 		cstr <- gsasl_property_get sctx (cFromProperty prop)
 		if cstr /= F.nullPtr
-			then fmap Just $ B.packCString cstr
+			then Just <$> B.packCString cstr
 			else do
 				liftIO $ checkCallbackException sctx
 				return Nothing
@@ -611,7 +610,7 @@ callbackImpl cb _ sctx cProp = let
 
 	sessionIO = do
 		let session = cb $ cToProperty cProp
-		fmap cFromProgress $ R.runReaderT (unSession session) (SessionCtx sctx)
+		cFromProgress <$> R.runReaderT (unSession session) (SessionCtx sctx)
 
 	onError :: SASLException -> IO F.CInt
 	onError (SASLException err) = return $ cFromError err
@@ -695,8 +694,8 @@ step input = bracketSession get free peek where
 		rc <- gsasl_step sctx pInput (fromIntegral inputLen) pOutput pOutputLen
 		when (rc /= 0) $ checkCallbackException sctx
 		progress <- checkStepRC rc
-		cstr <- F.peek pOutput
 		cstrLen <- F.peek pOutputLen
+		cstr <- F.peek pOutput
 		return (cstr, cstrLen, progress)
 
 	free (cstr, _, _) = gsasl_free cstr
@@ -728,65 +727,57 @@ checkStepRC x = case x of
 	1 -> return NeedsMore
 	_ -> E.throwIO (SASLException (cToError x))
 
--- | Encode data according to the negotiated SASL mechanism. This might mean
--- the data is integrity or privacy protected.
-encode :: B.ByteString -> Session B.ByteString
-encode input = do
+encodeDecodeHelper :: (F.Storable a, Integral a, Num t) =>
+	   (F.Ptr SessionCtx -> F.Ptr F.CChar -> t -> F.Ptr (F.Ptr F.CChar) -> F.Ptr a -> IO F.CInt)
+	-> B.ByteString
+	-> Session B.ByteString
+encodeDecodeHelper f input = do
 	sctx <- getSessionContext
 	liftIO $
 		B.unsafeUseAsCStringLen input $ \(cstr, cstrLen) ->
 		F.alloca $ \pOutput ->
 		F.alloca $ \pOutputLen -> do
-			rc <- gsasl_encode sctx cstr (fromIntegral cstrLen) pOutput pOutputLen
+			rc <- f sctx cstr (fromIntegral cstrLen) pOutput pOutputLen
 			when (rc /= 0) $ checkCallbackException sctx
 			checkRC rc
 			output <- F.peek pOutput
-			outputLen <- fromIntegral `fmap` F.peek pOutputLen
-			outBytes <- B.packCStringLen (output, outputLen)
+			outputLen <- fromIntegral <$> F.peek pOutputLen
+			outputBytes <- B.packCStringLen (output, outputLen)
 			gsasl_free output
-			return outBytes
+			return outputBytes
+
+-- | Encode data according to the negotiated SASL mechanism. This might mean
+-- the data is integrity or privacy protected.
+encode :: B.ByteString -> Session B.ByteString
+encode = encodeDecodeHelper gsasl_encode
 
 -- | Decode data according to the negotiated SASL mechanism. This might mean
 -- the data is integrity or privacy protected.
 decode :: B.ByteString -> Session B.ByteString
-decode input = do
-	sctx <- getSessionContext
-	liftIO $
-		B.unsafeUseAsCStringLen input $ \(cstr, cstrLen) ->
-		F.alloca $ \pOutput ->
-		F.alloca $ \pOutputLen -> do
-			rc <- gsasl_decode sctx cstr (fromIntegral cstrLen) pOutput pOutputLen
-			when (rc /= 0) $ checkCallbackException sctx
-			checkRC rc
-			output <- F.peek pOutput
-			outputLen <- fromIntegral `fmap` F.peek pOutputLen
-			outputBytes <- B.packCStringLen (output, outputLen)
-			gsasl_free output
-			return outputBytes
+decode = encodeDecodeHelper gsasl_decode
 
 -- }}}
 
 -- Bundled codecs {{{
 
-toBase64 :: B.ByteString -> B.ByteString
-toBase64 input = unsafePerformIO $
+base64Helper :: (F.Storable a, Integral a, Num t) =>
+	   (F.Ptr F.CChar -> t -> F.Ptr (F.Ptr F.CChar) -> F.Ptr a -> IO F.CInt)
+	-> B.ByteString
+	-> B.ByteString
+base64Helper f input = unsafePerformIO $
 	B.unsafeUseAsCStringLen input $ \(pIn, inLen) ->
 	F.alloca $ \pOut ->
 	F.alloca $ \pOutLen -> do
-	gsasl_base64_to pIn (fromIntegral inLen) pOut pOutLen >>= checkRC
+	f pIn (fromIntegral inLen) pOut pOutLen >>= checkRC
 	outLen <- F.peek pOutLen
 	outPtr <- F.peek pOut
 	B.packCStringLen (outPtr, fromIntegral outLen)
 
+toBase64 :: B.ByteString -> B.ByteString
+toBase64 = base64Helper gsasl_base64_to
+
 fromBase64 :: B.ByteString -> B.ByteString
-fromBase64 input = unsafePerformIO $
-	B.unsafeUseAsCStringLen input $ \(pIn, inLen) ->
-	F.alloca $ \pOut ->
-	F.alloca $ \pOutLen -> do
-	gsasl_base64_from pIn (fromIntegral inLen) pOut pOutLen >>= checkRC
-	outLen <- F.peek pOutLen
-	outPtr <- F.peek pOut
-	B.packCStringLen (outPtr, fromIntegral outLen)
+fromBase64 = base64Helper gsasl_base64_from
 
 md5 :: B.ByteString -> B.ByteString
 md5 input = unsafePerformIO $
@@ -855,11 +846,13 @@ checkRC x = case x of
 	_ -> E.throwIO (SASLException (cToError x))
 
 unfoldrM :: Monad m => (b -> m (Maybe (a, b))) -> b -> m [a]
-unfoldrM m b = m b >>= \x -> case x of
-	Just (a, new_b) -> do
-		as <- unfoldrM m new_b
-		return $ a : as
-	Nothing -> return []
+unfoldrM m b = do
+	x <- m b
+	case x of
+		Just (a, new_b) -> do
+			as <- unfoldrM m new_b
+			return $ a : as
+		Nothing -> return []
 
 -- }}}
 
