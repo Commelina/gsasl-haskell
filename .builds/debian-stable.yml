@@ -1,0 +1,22 @@
+image: debian/stable
+sources:
+- https://git.sr.ht/~singpolyma/gsasl-haskell
+packages:
+- ghc
+- cabal-install
+- c2hs
+- pkg-config
+- libgsasl7-dev
+- hlint
+tasks:
+- lint: |
+    cd gsasl-haskell
+    hlint -i 'Use camelCase' .
+- cabal_update: |
+    cabal update
+- dependencies: |
+    cd gsasl-haskell
+    cabal install --enable-tests --only-dependencies
+- build: |
+    cd gsasl-haskell
+    cabal build
