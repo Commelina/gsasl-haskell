@@ -78,6 +78,7 @@ import           Data.Maybe (fromMaybe)
 import           Control.Applicative (Applicative, pure, (<*>), (<$>))
 import qualified Control.Exception as E
 import           Control.Monad (ap, when, unless, (<=<))
+import           Control.Monad.Loops (unfoldrM)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Control.Monad.Trans.Reader as R
 import qualified Data.ByteString as B
@@ -844,15 +845,6 @@ checkRC :: F.CInt -> IO ()
 checkRC x = case x of
 	0 -> return ()
 	_ -> E.throwIO (SASLException (cToError x))
-
-unfoldrM :: Monad m => (b -> m (Maybe (a, b))) -> b -> m [a]
-unfoldrM m b = do
-	x <- m b
-	case x of
-		Just (a, new_b) -> do
-			as <- unfoldrM m new_b
-			return $ a : as
-		Nothing -> return []
 
 -- }}}
 
