@@ -35,6 +35,6 @@ library
     , bytestring >= 0.9
     , monad-loops >= 0.3
 
-  pkgconfig-depends: libgsasl >= 1.1
+  pkgconfig-depends: libgsasl >= 1.10
 
   exposed-modules: Network.Protocol.SASL.GNU

@@ -67,6 +67,9 @@ module Network.Protocol.SASL.GNU
 	, sha1
 	, hmacMD5
 	, hmacSHA1
+
+        , scramSecretsFromPasswordSha256
+
 	, nonce
 	, random
 	) where
@@ -261,6 +264,9 @@ instance Monad Session where
 
 instance MonadIO Session where
 	liftIO = Session . liftIO
+
+instance MonadFail Session where
+         fail = liftIO . fail
 
 type SessionProc = F.Ptr Context -> F.CString -> F.Ptr (F.Ptr SessionCtx) -> IO F.CInt
 
@@ -490,6 +496,11 @@ data Property
 	| PropertyScramSalt
 	| PropertyScramSaltedPassword
 
+        -- new
+        | PropertyTlsUnique
+        | PropertyScramServerKey
+        | PropertyScramStoredKey
+
 	| ValidateSimple
 	| ValidateExternal
 	| ValidateAnonymous
@@ -516,6 +527,11 @@ cFromProperty x = case x of
 	PropertyScramIter -> 15
 	PropertyScramSalt -> 16
 	PropertyScramSaltedPassword -> 17
+        -- new
+        PropertyTlsUnique -> 18
+        PropertyScramServerKey -> 23
+        PropertyScramStoredKey -> 24
+
 	ValidateSimple -> 500
 	ValidateExternal -> 501
 	ValidateAnonymous -> 502
@@ -541,6 +557,9 @@ cToProperty x = case x of
 	15 -> PropertyScramIter
 	16 -> PropertyScramSalt
 	17 -> PropertyScramSaltedPassword
+        18 -> PropertyTlsUnique
+        23 -> PropertyScramServerKey
+        24 -> PropertyScramStoredKey
 	500 -> ValidateSimple
 	501 -> ValidateExternal
 	502 -> ValidateAnonymous
@@ -836,6 +855,28 @@ random size = F.allocaBytes (fromInteger size) $ \buf -> do
 	gsasl_random buf (fromIntegral size) >>= checkRC
 	B.packCStringLen (buf, fromIntegral size)
 
+-- new
+scramSecretsFromPasswordSha256 :: B.ByteString -- password
+                               -> F.CUInt      -- iterations
+                               -> B.ByteString -- salt
+                               -> ( B.ByteString -- saltedPassword
+                                  , B.ByteString -- clientKey
+                                  , B.ByteString -- serverKey
+                                  , B.ByteString -- storedKey
+                                  )
+scramSecretsFromPasswordSha256 pw iter salt = unsafePerformIO $
+  B.unsafeUseAsCStringLen pw $ \(pPw, pwLen) ->
+  B.unsafeUseAsCStringLen salt $ \(pSalt, saltLen) ->
+  F.allocaBytes 32 $ \saltedPasswordBuf ->
+  F.allocaBytes 32 $ \clientKeyBuf ->
+  F.allocaBytes 32 $ \serverKeyBuf ->
+  F.allocaBytes 32 $ \storedKeyBuf -> do
+  gsasl_scram_secrets_from_password 3 pPw iter pSalt (fromIntegral saltLen) saltedPasswordBuf clientKeyBuf serverKeyBuf storedKeyBuf >>= checkRC
+  saltedPassword <- B.packCStringLen (saltedPasswordBuf, 32)
+  clientKey <- B.packCStringLen (clientKeyBuf, 32)
+  serverKey <- B.packCStringLen (serverKeyBuf, 32)
+  storedKey <- B.packCStringLen (storedKeyBuf, 32)
+  return (saltedPassword, clientKey, serverKey, storedKey)
 
 -- }}}
 
@@ -963,5 +1004,9 @@ foreign import ccall "gsasl.h gsasl_random"
 
 foreign import ccall "gsasl.h gsasl_free"
 	gsasl_free :: F.Ptr a -> IO ()
+
+-- new
+foreign import ccall "gsasl.h gsasl_scram_secrets_from_password"
+        gsasl_scram_secrets_from_password :: F.CUInt -> F.CString -> F.CUInt -> F.CString  -> F.CSize -> F.CString -> F.CString -> F.CString -> F.CString -> IO F.CInt
 
 -- }}}
